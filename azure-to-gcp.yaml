@@ -1,0 +1,41 @@
+name: $(Date:yyyyMMdd)$(Rev:.r)
+trigger:
+  - main
+stages:
+  - stage: auth
+    displayName: "GCP WIF Auth"
+    jobs:
+      - job: demo
+        timeoutInMinutes: 20
+        steps:
+          - task: AzureCLI@2
+            inputs:
+              azureSubscription: 'test-gcp-connection-sc'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                SUBJECT_TOKEN_TYPE="urn:ietf:params:oauth:token-type:jwt"
+                SUBJECT_TOKEN=$(az account get-access-token --query accessToken --output tsv)
+                STS_TOKEN=$(curl --silent -0 -X POST https://sts.googleapis.com/v1/token \
+                    -H 'Content-Type: text/json; charset=utf-8' \
+                    -d @- <<EOF | jq -r .access_token
+                    {
+                        "audience"           : "//iam.googleapis.com/projects/499628617160/locations/global/workloadIdentityPools/azure/providers/azure",
+                        "grantType"          : "urn:ietf:params:oauth:grant-type:token-exchange",
+                        "requestedTokenType" : "urn:ietf:params:oauth:token-type:access_token",
+                        "scope"              : "https://www.googleapis.com/auth/cloud-platform",
+                        "subjectTokenType"   : "$SUBJECT_TOKEN_TYPE",
+                        "subjectToken"       : "$SUBJECT_TOKEN"
+                    }
+                EOF)
+                echo $STS_TOKEN
+                ACCESS_TOKEN=$(curl --silent -0 -X POST https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/azure-connect-sa@g-np-1-s29-cicd-cloud-build.iam.gserviceaccount.com:generateAccessToken \
+                    -H "Content-Type: text/json; charset=utf-8" \
+                    -H "Authorization: Bearer $STS_TOKEN" \
+                    -d @- <<EOF | jq -r .accessToken
+                    {
+                        "scope": [ "https://www.googleapis.com/auth/cloud-platform" ]
+                    }
+                EOF)
+                echo $ACCESS_TOKEN
+                curl -H "Content-Type: application/x-www-form-urlencoded" -d "access_token=$ACCESS_TOKEN" https://www.googleapis.com/oauth2/v1/tokeninfo
